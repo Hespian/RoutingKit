@@ -137,7 +137,7 @@ public:
 		}
 	}
 
-private:
+//private:
 	void move_up_in_tree(unsigned pos){
 		while(pos != 0){
 			unsigned parent = (pos-1)/tree_arity;
