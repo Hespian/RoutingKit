@@ -9,10 +9,18 @@
 #include <vector>
 #include <fstream>
 #include <stdexcept>
+#include <iostream>
+
 
 namespace RoutingKit{
 
 namespace{
+    uint64_t numVerticesSettled;
+    uint64_t numEdgesRelaxed;
+    uint64_t numEdgesLookedAtForStalling;
+    std::vector<std::pair<unsigned, unsigned>> verticesSettledForward;
+    std::vector<std::pair<unsigned, unsigned>> verticesSettledBackward;
+
 
 	void sort_arcs_and_remove_multi_and_loop_arcs(
 		unsigned node_count, std::vector<unsigned>&tail, std::vector<unsigned>&head, std::vector<unsigned>&weight, std::vector<unsigned>&input_arc_id,
@@ -561,6 +569,8 @@ namespace{
 			removed_hop_count += graph.out(node, out_arc).hop_length;
 
 		return 1 + 1000*level + (1000*added_arc_count) / removed_arc_count + (1000*added_hop_count) / removed_hop_count;
+		// return 1 + 1000*level + (1000*added_arc_count) / removed_arc_count;
+		// return 1 + (1000*added_arc_count) / removed_arc_count;
 	}
 
 	void contract_node(Graph&graph, ShorterPathTest&shorter_path_test, unsigned node_being_contracted){
@@ -605,6 +615,95 @@ namespace {
 		Side forward, backward;
 	};
 
+
+    class RoundMinimumQueue {
+    public:
+        RoundMinimumQueue(unsigned count, Graph& graph) : graph(graph), keys(count), nextRoundIds(0), contained(count, false), numElems(0)  {
+        }
+
+        void push(IDKeyPair elem) {
+            unsigned id = elem.id;
+            unsigned key = elem.id;
+            contained[id] = true;
+            keys[id] = key;
+            numElems ++;
+        }
+
+        bool empty() {
+            return numElems == 0;
+        }
+
+        IDKeyPair pop() {
+            if(nextRoundIds.size() == 0) {
+                for(unsigned i = 0; i < contained.size(); ++i) {
+                    if(contained[i]) {
+                        bool isMin = true;
+                        for(unsigned in_arc = 0; in_arc < graph.in_deg(i); ++in_arc){
+                            unsigned x = graph.in(i, in_arc).node;
+                            if(contained[x] && keys[x] < keys[i]){
+                                isMin = false;
+                                break;
+                            }
+
+                        }
+
+                        if(isMin) {
+                            for(unsigned out_arc = 0; out_arc < graph.out_deg(i); ++out_arc){
+                                unsigned x = graph.out(i, out_arc).node;
+                                if(contained[x] && keys[x] < keys[i]){
+                                    isMin = false;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if(isMin) {
+                            nextRoundIds.push_back(i);
+                        }
+                    }
+                }
+                std::cout << nextRoundIds.size() << " out of " << numElems << std::endl;
+                if(nextRoundIds.size() == 0) {
+                    std::cout << "DONE" << std::endl;
+                }
+            }
+
+            unsigned result = nextRoundIds.back();
+            nextRoundIds.pop_back();
+            contained[result] = false;
+            numElems--;
+            return {result, keys[result]};
+        }
+
+
+        bool contains_id(unsigned id) {
+            return contained[id];
+        }
+
+        unsigned get_key(unsigned id) {
+            return keys[id];
+        }
+
+        void increase_key(IDKeyPair elem){
+            unsigned id = elem.id;
+            unsigned key = elem.id;
+            keys[id] = key;
+        }
+
+        void decrease_key(IDKeyPair elem){
+            unsigned id = elem.id;
+            unsigned key = elem.id;
+            keys[id] = key;
+        }
+
+    protected:
+        Graph&graph;
+        std::vector<unsigned> keys;
+        std::vector<unsigned> nextRoundIds;
+        std::vector<bool> contained;
+        unsigned numElems;
+    };
+
 	void build_ch_and_order(
 		Graph&graph,
 		ContractionHierarchy&ch,
@@ -626,7 +725,8 @@ namespace {
 
 		ch.rank.resize(node_count);
 		ch.order.resize(node_count);
-		MinIDQueue queue(node_count);
+		// RoundMinimumQueue queue(node_count, graph);
+        MinIDQueue queue(node_count);
 	
 
 		for(unsigned i=0; i<node_count; ++i){
@@ -1502,8 +1602,40 @@ ContractionHierarchyQuery&ContractionHierarchyQuery::add_target(unsigned externa
 	return *this;
 }
 
-namespace{
+    void ContractionHierarchyQuery::resetCounters() {
+        numVerticesSettled = 0;
+        numEdgesRelaxed = 0;
+        numEdgesLookedAtForStalling = 0;
+    }
 
+    void ContractionHierarchyQuery::printCounters(int numQueries) {
+        std::cout << "Average number of vertices settled (CH): "
+             << numVerticesSettled/numQueries
+                  << std::endl;
+        std::cout << "Average number of edges relaxed (CH): "
+             << numEdgesRelaxed/numQueries
+                  << std::endl;
+        std::cout << "Average number of edges edges looked at for stalling (CH): "
+                  << numEdgesLookedAtForStalling/numQueries
+                  << std::endl;
+    }
+
+    uint64_t ContractionHierarchyQuery::getNumVerticesSettled() {
+        return numVerticesSettled;
+    }
+
+    uint64_t ContractionHierarchyQuery::getNumEdgesRelaxed() {
+        return numEdgesRelaxed;
+    }
+
+    uint64_t ContractionHierarchyQuery::getNumEdgesLookedAtForStalling() {
+        return numEdgesLookedAtForStalling;
+    }
+
+    std::vector<std::pair<unsigned, unsigned>> ContractionHierarchyQuery::getVerticesSettledForward() {return verticesSettledForward; }
+    std::vector<std::pair<unsigned, unsigned>> ContractionHierarchyQuery::getVerticesSettledBackward() {return verticesSettledBackward;}
+
+namespace{
 	template<class SetPred>
 	void forward_expand_upward_ch_arcs_of_node(
 		unsigned node,
@@ -1517,6 +1649,7 @@ namespace{
 		const SetPred&set_predecessor
 	){
 		for(unsigned arc = forward_first_out[node]; arc < forward_first_out[node+1]; ++arc){
+            ++numEdgesRelaxed;
 			unsigned h = forward_head[arc], d = distance_to_node + forward_weight[arc];
 			if(was_forward_pushed.is_set(h)){
 				if(d < forward_tentative_distance[h]){
@@ -1539,7 +1672,9 @@ namespace{
 		const TimestampFlags&was_forward_pushed,
 		std::vector<unsigned>&forward_tentative_distance, const std::vector<unsigned>&backward_tentative_distance
 	){
+        // return false;
 		for(unsigned arc = backward_first_out[node]; arc < backward_first_out[node+1]; ++arc){
+            ++numEdgesLookedAtForStalling;
 			unsigned x = backward_head[arc];
 			if(was_forward_pushed.is_set(x)){
 				if(forward_tentative_distance[x] + backward_weight[arc] <= forward_tentative_distance[node])
@@ -1549,7 +1684,7 @@ namespace{
 		return false;
 	}
 
-
+    template<bool stallOnDemand>
 	void forward_settle_node(
 		unsigned&shortest_path_length,
 		unsigned&shortest_path_meeting_node,
@@ -1562,6 +1697,7 @@ namespace{
 	){
 
 
+        ++numVerticesSettled;
 		auto p = forward_queue.pop();
 		auto popped_node = p.id;
 		auto distance_to_popped_node = p.key;
@@ -1574,12 +1710,12 @@ namespace{
 		}
 		
 		if(
-			!forward_can_stall_at_node(
+			stallOnDemand ? !forward_can_stall_at_node(
 				popped_node,
 				backward_first_out, backward_head, backward_weight,
 				was_forward_pushed,
 				forward_tentative_distance, backward_tentative_distance
-			)
+                                                       ) : true
 		)
 			forward_expand_upward_ch_arcs_of_node(
 				popped_node, distance_to_popped_node,
@@ -1623,11 +1759,17 @@ namespace{
 	
 }
 
+template<bool stallOnDemand = true, bool logVerticesSettled = false>
 ContractionHierarchyQuery& ContractionHierarchyQuery::run(){
 	assert(ch && "query object must have an attached CH");
 	assert(!forward_queue.empty() && "must add at least one source before calling run");
 	assert(!backward_queue.empty() && "must add at least one target before calling run");
 	assert(state == ContractionHierarchyQuery::InternalState::initialized);
+
+    if constexpr(logVerticesSettled) {
+        verticesSettledForward.clear();
+        verticesSettledBackward.clear();
+    }
 
 	unsigned shortest_path_length = inf_weight;
 	shortest_path_meeting_node = invalid_id;
@@ -1656,7 +1798,10 @@ ContractionHierarchyQuery& ContractionHierarchyQuery::run(){
 			forward_next = true;
 
 		if(forward_next){
-			forward_settle_node(
+            if constexpr(logVerticesSettled) {
+                verticesSettledForward.push_back({ch->order[forward_queue.peek().id], forward_queue.peek().key});
+            }
+			forward_settle_node<stallOnDemand>(
 				shortest_path_length, shortest_path_meeting_node,
 				ch->forward.first_out, ch->forward.head, ch->forward.weight,
 				ch->backward.first_out, ch->backward.head, ch->backward.weight,
@@ -1667,7 +1812,10 @@ ContractionHierarchyQuery& ContractionHierarchyQuery::run(){
 			);
 			forward_next = false;
 		} else {
-			forward_settle_node(
+            if constexpr(logVerticesSettled) {
+                verticesSettledBackward.push_back({ch->order[backward_queue.peek().id], backward_queue.peek().key});
+            }
+			forward_settle_node<stallOnDemand>(
 				shortest_path_length, shortest_path_meeting_node,
 				ch->backward.first_out, ch->backward.head, ch->backward.weight,
 				ch->forward.first_out, ch->forward.head, ch->forward.weight,
@@ -2213,6 +2361,11 @@ template unsigned ContractionHierarchyQuery::get_extra_weight_distance<std::vect
 template int ContractionHierarchyQuery::get_extra_weight_distance<std::vector<int>,SaturatedWeightAddition>(const std::vector<int>&, const SaturatedWeightAddition&);
 template unsigned ContractionHierarchyQuery::get_extra_weight_distance<ContractionHierarchyExtraWeight<unsigned>,SaturatedWeightAddition>(const ContractionHierarchyExtraWeight<unsigned>&, const SaturatedWeightAddition&);
 template int ContractionHierarchyQuery::get_extra_weight_distance<ContractionHierarchyExtraWeight<int>,SaturatedWeightAddition>(const ContractionHierarchyExtraWeight<int>&, const SaturatedWeightAddition&);
+
+    template ContractionHierarchyQuery& ContractionHierarchyQuery::run<false, false>();
+    template ContractionHierarchyQuery& ContractionHierarchyQuery::run<false, true>();
+    template ContractionHierarchyQuery& ContractionHierarchyQuery::run<true, false>();
+    template ContractionHierarchyQuery& ContractionHierarchyQuery::run<true, true>();
 
 } // namespace RoutingKit
 
