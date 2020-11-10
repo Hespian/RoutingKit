@@ -6,6 +6,7 @@
 #include <routingkit/bit_vector.h>
 #include <routingkit/permutation.h>
 
+#include <string>
 #include <vector>
 #include <functional>
 #include <cassert>
