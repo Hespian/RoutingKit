@@ -7,7 +7,7 @@ archiver_name = "ar"
 
 # "-DROUTING_KIT_NO_GCC_EXTENSIONS", "-DROUTING_KIT_NO_POSIX", "-DROUTING_KIT_NO_ALIGNED_ALLOC"
 #compiler_options = ["-Wall", "-O0", "-ggdb","-march=native", "-ffast-math", "-std=c++11", "-D_GLIBCXX_DEBUG"]
-compiler_options = ["-Wall", "-DNDEBUG", "-march=native", "-ffast-math", "-std=c++11", "-O3"]
+compiler_options = ["-Wall", "-DNDEBUG", "-march=native", "-ffast-math", "-std=c++17", "-O3"]
 linker_options = []
 
 build_static_library = True
@@ -20,6 +20,15 @@ rebuild_if_generate_makefile_changes = True
 import os
 import re
 import sys
+
+mode = "Build"
+if len(sys.argv) > 1:
+    mode = sys.argv[1]
+    if mode == "Debug":
+        compiler_options.append("-D_GLIBCXX_DEBUG")
+        compiler_options.append("-D_GLIBCXX_DEBUG_PEDANTIC")
+
+
 
 def uniquify(l):
 	return sorted(list(set(l)))
@@ -38,7 +47,7 @@ def does_cpp_file_contains_main(file_name):
 src_files = [os.path.join("src",x) for x in os.listdir("src") if os.path.isfile(os.path.join("src", x))]
 cpp_files = [x for x in src_files if os.path.splitext(x)[1] == ".cpp"]
 h_files = [x for x in src_files if os.path.splitext(x)[1] == ".h"]
-bin_files = [os.path.join("bin", os.path.splitext(os.path.basename(x))[0]) for x in src_files if does_cpp_file_contains_main(x)]
+bin_files = [os.path.join(mode, "bin", os.path.splitext(os.path.basename(x))[0]) for x in src_files if does_cpp_file_contains_main(x)]
 
 if os.path.exists("include"):
 	lib_list = [x for x in os.listdir("include") if os.path.isdir(os.path.join("include", x))]
@@ -47,9 +56,9 @@ else:
 
 lib_files = []
 if build_static_library:
-	lib_files += [os.path.join("lib", "lib"+x+".a") for x in lib_list]
+	lib_files += [os.path.join(mode, "lib", "lib"+x+".a") for x in lib_list]
 if build_dynamic_library:
-	lib_files += [os.path.join("lib", "lib"+x+".so") for x in lib_list]
+	lib_files += [os.path.join(mode, "lib", "lib"+x+".so") for x in lib_list]
 external_h_files = [os.path.join("include", l, x) for l in lib_list for x in os.listdir(os.path.join("include", l))]
 
 def uncached_extract_direct_includes_from_source_file(file_name):
@@ -163,9 +172,9 @@ def generate_direct_cpp_dependencies():
 		depends = uniquify(depends)
 
 		if build_static_library:
-			direct_cpp_dependency[os.path.join("lib", "lib"+lib_file+".a")] = depends
+			direct_cpp_dependency[os.path.join(mode, "lib", "lib"+lib_file+".a")] = depends
 		if build_dynamic_library:
-			direct_cpp_dependency[os.path.join("lib", "lib"+lib_file+".so")] = depends
+			direct_cpp_dependency[os.path.join(mode, "lib", "lib"+lib_file+".so")] = depends
 
 
 generate_direct_cpp_dependencies()
@@ -259,7 +268,7 @@ with open("Makefile", "w") as f:
 	print("", file=f)
 
 	for cpp_file in cpp_files:
-		object_file = os.path.join("build", os.path.basename(os.path.splitext(cpp_file)[0]) + ".o")
+		object_file = os.path.join(mode, "build", os.path.basename(os.path.splitext(cpp_file)[0]) + ".o")
 
 		includes = extract_includes(cpp_file)
 		depends_on = [cpp_file] + includes[0] + includes[1]
@@ -276,7 +285,8 @@ with open("Makefile", "w") as f:
 			depends_on.append("generate_make_file")
 
 		print(object_file + ": " + " ".join(depends_on), file=f)
-		print("\t@mkdir -p build", file=f)
+		# print("\t@mkdir -p build", file=f)
+		print("\t@mkdir -p " + mode + "/build", file=f)
 		print("\t$(CC) $(CFLAGS) " + " ".join(extra_compiler_options) + " -c " + cpp_file + " -o "+object_file, file=f)
 		print("", file=f)
 
@@ -297,18 +307,21 @@ with open("Makefile", "w") as f:
 				
 			extra_linker_options = uniquify(extra_linker_options)
 
-			depends_on_object_files = [os.path.join("build", os.path.basename(os.path.splitext(x)[0]) + ".o") for x in depends_on_cpp_files]
+			depends_on_object_files = [os.path.join(mode, "build", os.path.basename(os.path.splitext(x)[0]) + ".o") for x in depends_on_cpp_files]
 			print(bin_file + ": " + " ".join(depends_on_object_files), file=f)
 			if os.path.splitext(bin_file)[1]==".so":
-				print("\t@mkdir -p lib", file=f)
+				# print("\t@mkdir -p lib", file=f)
+				print("\t@mkdir -p " + mode + "/lib", file=f)
 				print("\t$(CC) -shared $(LDFLAGS) "+" ".join(depends_on_object_files+extra_linker_options)+" -o "+bin_file, file=f)
 			elif os.path.splitext(bin_file)[1]==".a":
-				print("\t@mkdir -p lib", file=f)
+				# print("\t@mkdir -p lib", file=f)
+				print("\t@mkdir -p " + mode + "/lib", file=f)
 				print("\t$(AR) rcs "+bin_file + " " + " ".join(depends_on_object_files), file=f)
 				if len(extra_linker_options) != 0:
 					print("When linking against \""+bin_file+"\" you need to add \""+" ".join(extra_linker_options)+"\" to the linker as the last commandline options.")
 			else:	
-				print("\t@mkdir -p bin", file=f)
+				# print("\t@mkdir -p bin", file=f)
+				print("\t@mkdir -p " + mode + "/bin", file=f)
 				print("\t$(CC) $(LDFLAGS) "+" ".join(depends_on_object_files+extra_linker_options)+" "+" -o "+bin_file, file=f)
 			print("", file=f)
 
